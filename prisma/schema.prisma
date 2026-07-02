@@ -1,0 +1,81 @@
+// Prisma schema for the Client Meeting Calendar & Smart Follow-Up Tool.
+// No authentication / users — this is a single shared workspace. A client is
+// essentially just a name plus a few optional details and its meeting history.
+// Provider is SQLite for zero-config local dev. To move to Postgres later,
+// change `provider` to "postgresql" and point DATABASE_URL at your server.
+// SQLite has no native enums, so enum-like fields are stored as strings whose
+// allowed values are defined in src/lib/types.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id           String  @id @default(cuid())
+  clientName   String
+  businessName String?
+  contactName  String?
+  phone        String?
+  email        String?
+  notes        String?
+  tags         String? // comma-separated tags for simple filtering
+
+  // Interval handling (how often we should meet this client).
+  intervalMode       String    @default("automatic") // automatic | manual | paused | custom_date
+  manualIntervalDays Int? // used when intervalMode = manual
+  customNextDate     DateTime? // used when intervalMode = custom_date
+
+  // First-visit setup: until completed, the record-meeting form asks the rep
+  // how often they normally visit this client. That answer seeds the interval
+  // engine instead of a hard-coded 30-day default.
+  setupCompleted       Boolean @default(false)
+  expectedIntervalDays Int? // rep's answer to "how often do you normally visit?"
+
+  // Client value — typed by the rep or synced from Power BI. Feeds the
+  // priority score together with visit rhythm and overdue-ness.
+  annualValue     Float? // rough yearly revenue for this client, in £
+  valueSource     String? // manual | powerbi
+  powerBiName     String? // exact row name this client is linked to in Power BI
+  powerBiSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meetings Meeting[]
+}
+
+model Meeting {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  meetingDate DateTime
+  meetingType String   @default("in_person") // in_person | phone | video | site_visit
+
+  // completed meetings feed the interval engine; scheduled ones are future
+  // calendar events that don't (yet) count toward the rhythm.
+  status String @default("completed") // completed | scheduled | cancelled
+
+  // Voice recording + derived content
+  audioFileUrl  String? // relative path under /uploads, streamed via /api/audio/[id]
+  audioMimeType String?
+  transcript    String?
+  aiSummary     String?
+  manualNotes   String?
+
+  // Structured follow-up data
+  actionItems      String? // JSON-encoded string[] of action points
+  followUpRequired Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([meetingDate])
+  @@index([status])
+}
