@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
+  // Off so the in-app audio recorder isn't double-mounted in dev.
+  reactStrictMode: false,
   // Audio uploads can be a few MB; allow larger server action / route bodies.
   experimental: {
     serverActions: {

@@ -36,17 +36,49 @@ model Client {
   setupCompleted       Boolean @default(false)
   expectedIntervalDays Int? // rep's answer to "how often do you normally visit?"
 
+  // Suggestion snooze: pushed-back or skipped suggestions reappear on this
+  // date (no effect once it's in the past — self-expiring, nothing to clean).
+  snoozedUntil DateTime?
+  snoozeReason String? // optional "why" the rep gave when snoozing
+
   // Client value — typed by the rep or synced from Power BI. Feeds the
   // priority score together with visit rhythm and overdue-ness.
   annualValue     Float? // rough yearly revenue for this client, in £
   valueSource     String? // manual | powerbi
   powerBiName     String? // exact row name this client is linked to in Power BI
   powerBiSyncedAt DateTime?
+  salesRep        String? // account owner from Power BI (e.g. NICOLAS, JESSICA)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  meetings Meeting[]
+  meetings       Meeting[]
+  salesSnapshots SalesSnapshot[]
+}
+
+// One row per client per month of sales history, pulled from Power BI (or
+// seeded/entered for demos). This is what lets the app spot a client whose
+// volume is falling, who has stopped ordering, or who has switched what they
+// buy — signals that trigger a "catch-up" visit suggestion on top of the
+// normal visit rhythm. Nothing derived is stored: alerts are recomputed from
+// these rows (see src/lib/sales-health.ts) so edits/resyncs are always correct.
+model SalesSnapshot {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // First day of the calendar month this snapshot covers (local midnight).
+  periodStart DateTime
+  revenue     Float     @default(0) // total sales value for the month
+  units       Float? // total units/quantity for the month, when available
+  // Optional per-category breakdown for the month, JSON-encoded:
+  // {"Fresh Pasta": 1200, "Gnocchi": 300}. Powers the product-shift signal.
+  categories  String?
+  source      String    @default("powerbi") // powerbi | manual | demo
+  syncedAt    DateTime  @default(now())
+
+  @@unique([clientId, periodStart])
+  @@index([clientId])
 }
 
 model Meeting {

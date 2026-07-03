@@ -23,6 +23,11 @@ export interface ScheduleInput {
    * handing over to the learned estimate as gaps accumulate.
    */
   expectedIntervalDays?: number | null;
+  /**
+   * A pushed-back/skipped suggestion: the next suggested date is moved to at
+   * least this date. Dates in the past have no effect (self-expiring).
+   */
+  snoozedUntil?: Date | null;
   /** Client relationship status; "paused" suppresses reminders too. */
   clientPaused: boolean;
   /** Completed meeting dates (any order). */
@@ -137,7 +142,13 @@ export function computeSchedule(input: ScheduleInput): ScheduleInfo {
     };
   }
 
-  const nextSuggestedDate = addDays(startOfDay(lastMeetingDate), effectiveIntervalDays);
+  let nextSuggestedDate = addDays(startOfDay(lastMeetingDate), effectiveIntervalDays);
+
+  // A snooze pushes the suggestion forward, never backward.
+  if (input.snoozedUntil) {
+    const snooze = startOfDay(input.snoozedUntil);
+    if (snooze > nextSuggestedDate) nextSuggestedDate = snooze;
+  }
 
   return finalize({
     effectiveIntervalDays,

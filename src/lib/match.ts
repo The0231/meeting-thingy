@@ -92,7 +92,19 @@ export function nameSimilarity(a: string, b: string): number {
   const nb = normalizeName(b);
   if (!na || !nb) return 0;
   if (na === nb) return 1;
-  return Math.max(editSimilarity(na, nb), tokenSimilarity(tokens(na), tokens(nb)));
+  const ta = tokens(na);
+  const tb = tokens(nb);
+  let best = Math.max(editSimilarity(na, nb), tokenSimilarity(ta, tb));
+  // "Bicester Village" should strongly match "Bicester Village (La Tua
+  // Pasta)": when one name extends the other, compare against the leading
+  // words too (slightly discounted so exact full names still win). Needs at
+  // least two tokens so single common words can't hijack long names.
+  if (tb.length > ta.length && ta.length >= 2) {
+    best = Math.max(best, editSimilarity(na, tb.slice(0, ta.length).join(" ")) * 0.95);
+  } else if (ta.length > tb.length && tb.length >= 2) {
+    best = Math.max(best, editSimilarity(ta.slice(0, tb.length).join(" "), nb) * 0.95);
+  }
+  return best;
 }
 
 export interface NameMatch<T> {
@@ -132,24 +144,39 @@ export function findNameInText<T>(
     const nameNorm = normalizeName(getName(candidate));
     const nameTokens = tokens(nameNorm);
     if (nameTokens.length === 0) continue;
+    // Names that normalize to almost nothing (e.g. "A&CO LIMITED" → "a")
+    // would match random words in any sentence — skip them here; they can
+    // still be found by typing in the search box.
+    if (nameNorm.replace(/\s/g, "").length < 4) continue;
+
+    // People rarely say a company's full registered name — try the full name
+    // AND its leading words ("Bicester Village" for "Bicester Village (La
+    // Tua Pasta)"), slightly discounting prefix-only matches.
+    const targets: { toks: string[]; weight: number }[] = [{ toks: nameTokens, weight: 1 }];
+    for (const len of [2, 3]) {
+      if (nameTokens.length > len) targets.push({ toks: nameTokens.slice(0, len), weight: 0.95 });
+    }
 
     let best = 0;
-    const sizes = new Set(
-      [nameTokens.length - 1, nameTokens.length, nameTokens.length + 1].filter(
-        (s) => s >= 1,
-      ),
-    );
-    for (const size of sizes) {
-      for (let i = 0; i + size <= textTokens.length; i++) {
-        const window = textTokens.slice(i, i + size);
-        const sim = Math.max(
-          editSimilarity(window.join(" "), nameNorm),
-          tokenSimilarity(window, nameTokens),
-        );
-        if (sim > best) best = sim;
-        if (best === 1) break;
+    for (const target of targets) {
+      const tNorm = target.toks.join(" ");
+      const sizes = new Set(
+        [target.toks.length - 1, target.toks.length, target.toks.length + 1].filter((s) => s >= 1),
+      );
+      for (const size of sizes) {
+        for (let i = 0; i + size <= textTokens.length; i++) {
+          const window = textTokens.slice(i, i + size);
+          const sim =
+            Math.max(
+              editSimilarity(window.join(" "), tNorm),
+              tokenSimilarity(window, target.toks),
+            ) * target.weight;
+          if (sim > best) best = sim;
+          if (best >= 1) break;
+        }
+        if (best >= 1) break;
       }
-      if (best === 1) break;
+      if (best >= 1) break;
     }
     if (best >= minScore) results.push({ candidate, score: best });
   }

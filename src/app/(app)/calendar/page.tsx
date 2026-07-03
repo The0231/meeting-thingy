@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { Mic } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Calendar } from "@/components/Calendar";
 
@@ -8,13 +6,7 @@ export default function CalendarPage() {
     <div className="space-y-6">
       <PageHeader
         title="Calendar"
-        subtitle="Past meetings, scheduled visits and suggested follow-ups"
-        action={
-          <Link href="/record" className="btn-primary">
-            <Mic className="h-4 w-4" />
-            Record meeting
-          </Link>
-        }
+        subtitle="Scheduled visits show on the calendar. Suggested visits for the next few weeks appear below — each with a recommended date — most urgent first."
       />
       <Calendar />
     </div>

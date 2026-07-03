@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
+    "@azure/msal-node": "^5.3.1",
     "@prisma/client": "^6.3.0",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.469.0",

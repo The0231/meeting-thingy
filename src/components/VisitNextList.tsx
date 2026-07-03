@@ -26,7 +26,7 @@ export function VisitNextList({ clients }: { clients: ClientDTO[] }) {
           <span
             className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
               i === 0
-                ? "bg-brand-600 text-white"
+                ? "bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-sm shadow-brand-500/40"
                 : "bg-gray-100 text-gray-500"
             }`}
           >

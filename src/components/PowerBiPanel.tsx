@@ -36,6 +36,12 @@ interface SyncResult {
   unmatched: { powerBiName: string; value: number | null; suggestions: SyncSuggestion[] }[];
 }
 
+interface SalesHistoryResult {
+  rowsFetched: number;
+  clientsUpdated: number;
+  snapshotsWritten: number;
+}
+
 function fmtValue(v: number | null): string {
   if (v == null) return "—";
   return `£${Math.round(v).toLocaleString("en-GB")}/yr`;
@@ -46,6 +52,7 @@ export function PowerBiPanel({ status }: { status: Status }) {
   const [syncing, setSyncing] = useState(false);
   const [createMissing, setCreateMissing] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
+  const [salesHistory, setSalesHistory] = useState<SalesHistoryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyRow, setBusyRow] = useState<string | null>(null);
 
@@ -53,6 +60,7 @@ export function PowerBiPanel({ status }: { status: Status }) {
     setSyncing(true);
     setError(null);
     setResult(null);
+    setSalesHistory(null);
     try {
       const res = await fetch("/api/powerbi/sync", {
         method: "POST",
@@ -62,6 +70,7 @@ export function PowerBiPanel({ status }: { status: Status }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Sync failed.");
       setResult(data.result);
+      setSalesHistory(data.salesHistory ?? null);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sync failed.");
@@ -210,6 +219,17 @@ export function PowerBiPanel({ status }: { status: Status }) {
             {result.created.length > 0 && <>, {result.created.length} created</>}
             {result.unmatched.length > 0 && <>, {result.unmatched.length} need a decision</>}.
           </p>
+
+          {salesHistory && (
+            <p className="flex items-center gap-1.5 text-sm text-gray-600">
+              <BarChart3 className="h-4 w-4 text-brand-500" />
+              Sales history: {salesHistory.snapshotsWritten} monthly snapshot
+              {salesHistory.snapshotsWritten === 1 ? "" : "s"} across{" "}
+              {salesHistory.clientsUpdated} client
+              {salesHistory.clientsUpdated === 1 ? "" : "s"} — powering the
+              drop / stopped / switched alerts on the calendar.
+            </p>
+          )}
 
           {result.unmatched.length > 0 && (
             <div className="space-y-3">

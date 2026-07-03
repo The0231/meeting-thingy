@@ -12,7 +12,12 @@ body {
 }
 
 body {
-  background: var(--bg);
+  /* Soft, airy backdrop instead of a flat grey */
+  background:
+    radial-gradient(80% 50% at 15% 0%, rgba(48, 102, 255, 0.05), transparent 60%),
+    radial-gradient(70% 45% at 90% 5%, rgba(124, 131, 255, 0.05), transparent 55%),
+    linear-gradient(180deg, #f7f8fd 0%, #f3f5fb 100%);
+  background-attachment: fixed;
   color: #111827;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -21,19 +26,19 @@ body {
 /* Reusable component classes (kept here so every page stays visually consistent) */
 @layer components {
   .card {
-    @apply rounded-xl border border-gray-200 bg-white shadow-card;
+    @apply rounded-2xl border border-gray-100 bg-white/90 shadow-card backdrop-blur-sm transition-shadow duration-200;
   }
   .card-pad {
     @apply p-5;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-all duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-brand-600 text-white hover:bg-brand-700;
+    @apply btn bg-gradient-to-b from-brand-500 to-brand-600 text-white shadow-sm shadow-brand-500/30 hover:from-brand-600 hover:to-brand-700;
   }
   .btn-secondary {
-    @apply btn border border-gray-300 bg-white text-gray-700 hover:bg-gray-50;
+    @apply btn border border-gray-200 bg-white text-gray-700 shadow-sm hover:border-gray-300 hover:bg-gray-50;
   }
   .btn-danger {
     @apply btn bg-status-overdue text-white hover:opacity-90;
@@ -42,7 +47,7 @@ body {
     @apply btn text-gray-600 hover:bg-gray-100;
   }
   .input {
-    @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none ring-brand-200 placeholder:text-gray-400 focus:border-brand-400 focus:ring-2;
+    @apply w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-sm text-gray-900 outline-none ring-brand-200 transition-shadow placeholder:text-gray-400 focus:border-brand-400 focus:ring-2;
   }
   .label {
     @apply mb-1 block text-sm font-medium text-gray-700;
@@ -63,4 +68,3 @@ body {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
 }
-

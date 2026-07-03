@@ -21,10 +21,12 @@ export default async function DashboardPage() {
         title="Dashboard"
         subtitle="Your client relationships at a glance"
         action={
-          <Link href="/record" className="btn-primary">
-            <Mic className="h-4 w-4" />
-            Record meeting
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/record" className="btn-primary">
+              <Mic className="h-4 w-4" />
+              Record meeting
+            </Link>
+          </div>
         }
       />
 

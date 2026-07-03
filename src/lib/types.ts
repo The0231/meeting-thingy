@@ -106,10 +106,13 @@ export interface ClientDTO {
   customNextDate: string | null;
   setupCompleted: boolean;
   expectedIntervalDays: number | null;
+  snoozedUntil: string | null;
+  snoozeReason: string | null;
   annualValue: number | null;
   valueSource: ValueSource | null;
   powerBiName: string | null;
   powerBiSyncedAt: string | null;
+  salesRep: string | null;
   createdAt: string;
   updatedAt: string;
   // derived

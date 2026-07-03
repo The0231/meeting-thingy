@@ -15,6 +15,32 @@ function daysAgo(n: number): Date {
 function daysFromNow(n: number): Date {
   return daysAgo(-n);
 }
+// First day of the month `offset` months from now (0 = this month, -1 = last).
+function monthStart(offset: number): Date {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth() + offset, 1);
+}
+
+interface SnapshotSpec {
+  offset: number; // months ago
+  revenue: number;
+  units?: number;
+  categories?: Record<string, number>;
+}
+async function addSnapshots(clientId: string, rows: SnapshotSpec[]): Promise<void> {
+  for (const r of rows) {
+    await prisma.salesSnapshot.create({
+      data: {
+        clientId,
+        periodStart: monthStart(r.offset),
+        revenue: r.revenue,
+        units: r.units ?? null,
+        categories: r.categories ? JSON.stringify(r.categories) : null,
+        source: "demo",
+      },
+    });
+  }
+}
 
 async function main() {
   // The app is in real use now — demo data must be opted into explicitly.
@@ -25,6 +51,7 @@ async function main() {
     return;
   }
   console.log("Clearing existing data…");
+  await prisma.salesSnapshot.deleteMany();
   await prisma.meeting.deleteMany();
   await prisma.client.deleteMany();
 
@@ -71,7 +98,7 @@ async function main() {
   });
 
   // 2) Rhythm slowing down: was monthly, last gap stretched → flags "interval changed".
-  await prisma.client.create({
+  const bella = await prisma.client.create({
     data: {
       clientName: "Bella Foods",
       businessName: "Bella Foods Distribution",
@@ -97,7 +124,7 @@ async function main() {
   });
 
   // 3) Monthly client, now overdue.
-  await prisma.client.create({
+  const cornerDeli = await prisma.client.create({
     data: {
       clientName: "Corner Deli",
       contactName: "Priya Patel",
@@ -120,7 +147,7 @@ async function main() {
   });
 
   // 4) Fortnightly client, well overdue.
-  await prisma.client.create({
+  const sunrise = await prisma.client.create({
     data: {
       clientName: "Sunrise Catering",
       businessName: "Sunrise Catering Group",
@@ -236,9 +263,81 @@ async function main() {
     },
   });
 
+  // 10) Product-shift client — monthly, due soon, but their order has swung
+  // from fresh pasta onto gnocchi (a Power BI sales-health flag).
+  const ponti = await prisma.client.create({
+    data: {
+      clientName: "Ponti Ristorante",
+      contactName: "Marco Ponti",
+      tags: "restaurant,london",
+      intervalMode: "automatic",
+      setupCompleted: true,
+      expectedIntervalDays: 30,
+      annualValue: 60000,
+      valueSource: "manual",
+      notes: "Monthly order. Range has changed recently.",
+      meetings: {
+        create: [
+          { meetingDate: daysAgo(42), meetingType: "in_person", status: "completed" },
+          { meetingDate: daysAgo(12), meetingType: "in_person", status: "completed" },
+        ],
+      },
+    },
+  });
+
+  console.log("Seeding sales history (Power BI sales-health demo)…");
+
+  // Bella Foods — volume DROP: steady ~£8k/mo, then falls to ~£3.5k.
+  await addSnapshots(bella.id, [
+    { offset: -8, revenue: 8200 },
+    { offset: -7, revenue: 7900 },
+    { offset: -6, revenue: 8100 },
+    { offset: -5, revenue: 8000 },
+    { offset: -4, revenue: 8300 },
+    { offset: -3, revenue: 3800 },
+    { offset: -2, revenue: 3400 },
+    { offset: -1, revenue: 3300 },
+  ]);
+
+  // Corner Deli — STOPPED ordering: regular orders, then nothing for months.
+  await addSnapshots(cornerDeli.id, [
+    { offset: -8, revenue: 620 },
+    { offset: -7, revenue: 580 },
+    { offset: -6, revenue: 640 },
+    { offset: -5, revenue: 600 },
+    { offset: -4, revenue: 610 },
+    { offset: -3, revenue: 590 },
+    // months -2, -1 and this month have no orders → detected as "stopped".
+  ]);
+
+  // Ponti Ristorante — PRODUCT SHIFT: fresh pasta → gnocchi, spend flat.
+  await addSnapshots(ponti.id, [
+    { offset: -8, revenue: 1700, categories: { "Fresh Pasta": 1500, Gnocchi: 200 } },
+    { offset: -7, revenue: 1700, categories: { "Fresh Pasta": 1500, Gnocchi: 200 } },
+    { offset: -6, revenue: 1700, categories: { "Fresh Pasta": 1500, Gnocchi: 200 } },
+    { offset: -5, revenue: 1700, categories: { "Fresh Pasta": 1500, Gnocchi: 200 } },
+    { offset: -4, revenue: 1700, categories: { "Fresh Pasta": 1500, Gnocchi: 200 } },
+    { offset: -3, revenue: 1700, categories: { "Fresh Pasta": 100, Gnocchi: 1600 } },
+    { offset: -2, revenue: 1700, categories: { "Fresh Pasta": 100, Gnocchi: 1600 } },
+    { offset: -1, revenue: 1700, categories: { "Fresh Pasta": 100, Gnocchi: 1600 } },
+  ]);
+
+  // Sunrise Catering — HEALTHY control: steady, no flag despite being overdue.
+  await addSnapshots(sunrise.id, [
+    { offset: -6, revenue: 10200, categories: { "Fresh Pasta": 6200, Ravioli: 4000 } },
+    { offset: -5, revenue: 9900, categories: { "Fresh Pasta": 6000, Ravioli: 3900 } },
+    { offset: -4, revenue: 10100, categories: { "Fresh Pasta": 6100, Ravioli: 4000 } },
+    { offset: -3, revenue: 10000, categories: { "Fresh Pasta": 6000, Ravioli: 4000 } },
+    { offset: -2, revenue: 10300, categories: { "Fresh Pasta": 6300, Ravioli: 4000 } },
+    { offset: -1, revenue: 9800, categories: { "Fresh Pasta": 5900, Ravioli: 3900 } },
+  ]);
+
   const clientCount = await prisma.client.count();
   const meetingCount = await prisma.meeting.count();
-  console.log(`Done. Seeded ${clientCount} clients and ${meetingCount} meetings.`);
+  const snapshotCount = await prisma.salesSnapshot.count();
+  console.log(
+    `Done. Seeded ${clientCount} clients, ${meetingCount} meetings and ${snapshotCount} sales snapshots.`,
+  );
 }
 
 main()

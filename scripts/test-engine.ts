@@ -3,6 +3,9 @@
 
 import { estimateInterval, humanIntervalLabel, detectIntervalShift, type IntervalEstimate } from "../src/lib/interval";
 import { computeSchedule } from "../src/lib/reminders";
+import { chooseVisitDate } from "../src/lib/suggest";
+import { toDateKey } from "../src/lib/dates";
+import { detectSalesAlerts, type MonthlySales } from "../src/lib/sales-health";
 
 let passed = 0;
 let failed = 0;
@@ -146,6 +149,108 @@ console.log("Scheduling & reminder states");
 
   const custom = computeSchedule({ ...base, intervalMode: "custom_date", customNextDate: new Date(TODAY.getTime() + 3 * DAY), estimate: est(30), completedMeetingDates: [at(40)] });
   check("custom date drives schedule", custom.intervalSource === "custom_date" && custom.reminderState === "upcoming", custom.reminderState);
+}
+
+console.log("Suggested visit date (batching + weekday)");
+{
+  // 2024-01-01 is a Monday. 08 Mon, 09 Tue, 10 Wed, 12 Fri, 13 Sat, 15 Mon.
+  const today0 = new Date(2024, 0, 8);
+  const noneSched = new Map<string, number>();
+
+  const past = chooseVisitDate({
+    dueDate: new Date(2024, 0, 1),
+    today: today0,
+    flexDays: 6,
+    scheduledCountByDay: noneSched,
+  });
+  check("never suggests a past date", toDateKey(past.date) === "2024-01-08", toDateKey(past.date));
+
+  const sched = new Map<string, number>([["2024-01-09", 2]]);
+  const batched = chooseVisitDate({
+    dueDate: new Date(2024, 0, 10),
+    today: today0,
+    flexDays: 6,
+    scheduledCountByDay: sched,
+  });
+  check(
+    "batches onto a nearby booked day",
+    toDateKey(batched.date) === "2024-01-09" && batched.batchedWith === 2,
+    `${toDateKey(batched.date)} x${batched.batchedWith}`,
+  );
+
+  const wknd = chooseVisitDate({
+    dueDate: new Date(2024, 0, 13),
+    today: today0,
+    flexDays: 6,
+    scheduledCountByDay: noneSched,
+  });
+  check("weekend due date rolls to Monday", toDateKey(wknd.date) === "2024-01-15", toDateKey(wknd.date));
+
+  const far = new Map<string, number>([["2024-01-30", 3]]);
+  const noBatch = chooseVisitDate({
+    dueDate: new Date(2024, 0, 10),
+    today: today0,
+    flexDays: 6,
+    scheduledCountByDay: far,
+  });
+  check(
+    "ignores booked days outside the flex window",
+    toDateKey(noBatch.date) === "2024-01-10" && noBatch.batchedWith === 0,
+    toDateKey(noBatch.date),
+  );
+}
+
+console.log("Sales-health alerts (Power BI signals)");
+{
+  const SALES_TODAY = new Date(2026, 6, 15); // 15 Jul 2026
+  const ms = (
+    monthsAgo: number,
+    revenue: number,
+    categories?: Record<string, number>,
+  ): MonthlySales => ({
+    periodStart: new Date(2026, 6 - monthsAgo, 1),
+    revenue,
+    units: null,
+    categories: categories ?? null,
+  });
+
+  const drop = detectSalesAlerts(
+    [ms(8, 8000), ms(7, 8000), ms(6, 8000), ms(5, 8000), ms(4, 8000), ms(3, 3500), ms(2, 3400), ms(1, 3300)],
+    { today: SALES_TODAY },
+  );
+  check("volume drop detected", drop.some((a) => a.type === "volume_drop"), JSON.stringify(drop.map((a) => a.type)));
+  check("volume drop is high severity", drop.some((a) => a.type === "volume_drop" && a.severity === "high"));
+
+  const stopped = detectSalesAlerts(
+    [ms(8, 600), ms(7, 600), ms(6, 600), ms(5, 600), ms(4, 600), ms(3, 600)],
+    { today: SALES_TODAY },
+  );
+  check("stopped ordering detected (staleness)", stopped.some((a) => a.type === "stopped_ordering"), JSON.stringify(stopped.map((a) => a.type)));
+
+  const shift = detectSalesAlerts(
+    [
+      ms(8, 1700, { "Fresh Pasta": 1500, Gnocchi: 200 }),
+      ms(7, 1700, { "Fresh Pasta": 1500, Gnocchi: 200 }),
+      ms(6, 1700, { "Fresh Pasta": 1500, Gnocchi: 200 }),
+      ms(5, 1700, { "Fresh Pasta": 1500, Gnocchi: 200 }),
+      ms(4, 1700, { "Fresh Pasta": 1500, Gnocchi: 200 }),
+      ms(3, 1700, { "Fresh Pasta": 100, Gnocchi: 1600 }),
+      ms(2, 1700, { "Fresh Pasta": 100, Gnocchi: 1600 }),
+      ms(1, 1700, { "Fresh Pasta": 100, Gnocchi: 1600 }),
+    ],
+    { today: SALES_TODAY },
+  );
+  check("product shift detected", shift.some((a) => a.type === "product_shift"), JSON.stringify(shift.map((a) => a.type)));
+  check("flat spend is not flagged as a drop", !shift.some((a) => a.type === "volume_drop"));
+
+  const healthy = detectSalesAlerts(
+    [ms(6, 10000), ms(5, 10200), ms(4, 9900), ms(3, 10000), ms(2, 10100), ms(1, 9950)],
+    { today: SALES_TODAY },
+  );
+  check("no alerts for a steady client", healthy.length === 0, JSON.stringify(healthy.map((a) => a.type)));
+
+  const thin = detectSalesAlerts([ms(2, 500), ms(1, 500)], { today: SALES_TODAY });
+  check("no alert on thin history", thin.length === 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

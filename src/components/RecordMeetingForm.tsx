@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   ClipboardList,
 } from "lucide-react";
+import { parseFrequencyDays } from "@/lib/frequency";
 import { MEETING_TYPES, LABELS } from "@/lib/types";
 
 interface ClientOption {
@@ -29,6 +30,21 @@ interface ClientMatch {
   clientId: string;
   clientName: string;
   score: number;
+}
+
+// A customer from the live Power BI directory (not yet a calendar client).
+interface PbiMatch {
+  name: string;
+  value: number | null;
+  rep: string | null;
+  score: number;
+}
+
+function fmtValueShort(v: number | null): string {
+  if (v == null) return "";
+  if (v >= 1_000_000) return `£${(v / 1_000_000).toFixed(1)}m`;
+  if (v >= 1_000) return `£${Math.round(v / 1_000)}k`;
+  return `£${Math.round(v)}`;
 }
 
 // First-visit setup: "how often do you normally visit this client?"
@@ -98,15 +114,21 @@ function StepTitle({ n, title, hint }: { n: number; title: string; hint?: string
 export function RecordMeetingForm({
   clients,
   preselectedClientId,
+  meetingId,
+  defaultDate,
 }: {
   clients: ClientOption[];
   preselectedClientId?: string;
+  // When set, we're logging an existing booked visit: save COMPLETES that
+  // meeting instead of creating a new one (avoids a duplicate).
+  meetingId?: string;
+  defaultDate?: string; // yyyy-MM-dd, e.g. the booked date
 }) {
   const router = useRouter();
 
   const [clientId, setClientId] = useState(preselectedClientId ?? "");
-  const [meetingDate, setMeetingDate] = useState(() =>
-    new Date().toISOString().slice(0, 10),
+  const [meetingDate, setMeetingDate] = useState(
+    () => defaultDate || new Date().toISOString().slice(0, 10),
   );
   const [meetingType, setMeetingType] = useState("in_person");
 
@@ -127,14 +149,73 @@ export function RecordMeetingForm({
   // Spoken-name matching ("who is this meeting with?" from the transcript).
   const [matching, setMatching] = useState(false);
   const [matchSuggestions, setMatchSuggestions] = useState<ClientMatch[]>([]);
+  const [pbiSuggestions, setPbiSuggestions] = useState<PbiMatch[]>([]);
+
+  // Client picker: live search over calendar clients AND the Power BI
+  // customer directory — meetings must link to a real customer.
+  const [clientList, setClientList] = useState<ClientOption[]>(clients);
+  const [clientQuery, setClientQuery] = useState(
+    () => clients.find((c) => c.id === preselectedClientId)?.clientName ?? "",
+  );
+  const [searchResults, setSearchResults] = useState<{ matches: ClientMatch[]; powerbi: PbiMatch[] } | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced directory search as the rep types.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const q = clientQuery.trim();
+    if (q.length < 2) {
+      setSearchResults(null);
+      return;
+    }
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/clients/match", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: q }),
+        });
+        const data = await res.json();
+        if (res.ok) setSearchResults({ matches: data.matches ?? [], powerbi: data.powerbi ?? [] });
+      } catch {
+        /* keep previous results */
+      }
+    }, 300);
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientQuery, searchOpen]);
 
   // First-visit setup answers (shown when the chosen client hasn't been set up).
   const [rhythmChoice, setRhythmChoice] = useState("");
   const [customDays, setCustomDays] = useState("");
   const [valueInput, setValueInput] = useState("");
 
-  const selectedClient = clients.find((c) => c.id === clientId) ?? null;
+  const selectedClient = clientList.find((c) => c.id === clientId) ?? null;
   const needsSetup = selectedClient != null && !selectedClient.setupCompleted;
+
+  // If the rep already SAID how often they meet ("I see them every week"),
+  // fill the setup answer from the notes automatically.
+  useEffect(() => {
+    if (!needsSetup || rhythmChoice) return;
+    const days = parseFrequencyDays(transcript);
+    if (!days) return;
+    const preset = RHYTHM_OPTIONS.find((o) => o.value === String(days));
+    if (preset) {
+      setRhythmChoice(preset.value);
+    } else {
+      setRhythmChoice("custom");
+      setCustomDays(String(days));
+    }
+    setNotice(
+      `Picked up from your notes: you meet them about every ${days === 7 ? "week" : days + " days"} — change it below if that's wrong.`,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcript, needsSetup]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -187,17 +268,57 @@ export function RecordMeetingForm({
     };
   }, []);
 
-  function selectClient(id: string) {
+  function selectClient(id: string, list?: ClientOption[]) {
     setClientId(id);
     setMatchSuggestions([]);
-    const c = clients.find((x) => x.id === id);
+    setPbiSuggestions([]);
+    setSearchOpen(false);
+    const c = (list ?? clientList).find((x) => x.id === id);
+    if (c) setClientQuery(c.clientName);
     setRhythmChoice("");
     setCustomDays("");
     setValueInput(c?.annualValue != null ? String(Math.round(c.annualValue)) : "");
   }
 
-  /** Fuzzy-match the transcript against the client database (Power BI-synced
-   *  clients included) and pick — or suggest — who the meeting was with. */
+  /** A Power BI customer was picked — create the linked calendar client. */
+  async function pickPowerBi(pbiName: string) {
+    setLinking(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/clients/from-powerbi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ powerBiName: pbiName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't link the customer.");
+      const c = data.client;
+      const option: ClientOption = {
+        id: c.id,
+        clientName: c.clientName,
+        setupCompleted: c.setupCompleted,
+        expectedIntervalDays: c.expectedIntervalDays,
+        annualValue: c.annualValue,
+        valueSource: c.valueSource,
+        meetingCount: c.meetingCount,
+      };
+      const nextList = [option, ...clientList.filter((x) => x.id !== option.id)];
+      setClientList(nextList);
+      selectClient(option.id, nextList);
+      setNotice(
+        `${c.clientName} linked from Power BI${c.salesRep ? ` (${c.salesRep}'s customer)` : ""}.` +
+          (!c.setupCompleted ? " Quick setup below — one time only." : ""),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't link the customer.");
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  /** Fuzzy-match the transcript against calendar clients AND the Power BI
+   *  customer directory. Auto-picks a confident match; otherwise shows
+   *  suggestions and asks the rep to type/spell the name. */
   async function matchClientFromText(text: string, auto = false) {
     if (!text.trim()) {
       if (!auto) setNotice("Record or type some notes first, then I can find the client.");
@@ -213,15 +334,33 @@ export function RecordMeetingForm({
       });
       const data = await res.json();
       const matches: ClientMatch[] = res.ok ? data.matches ?? [] : [];
+      const powerbi: PbiMatch[] = res.ok ? data.powerbi ?? [] : [];
+
       if (matches.length > 0 && matches[0].score >= 0.85) {
         selectClient(matches[0].clientId);
         setNotice(
           `Matched to ${matches[0].clientName} (${Math.round(matches[0].score * 100)}% sure) — change it if that's wrong.`,
         );
-      } else if (matches.length > 0) {
+      } else if (
+        powerbi.length > 0 &&
+        powerbi[0].score >= 0.88 &&
+        (matches.length === 0 || powerbi[0].score > matches[0].score) &&
+        // Never guess between near-identical customers (e.g. three different
+        // "Marks & Spencer" accounts) — ask instead.
+        (powerbi.length === 1 || powerbi[0].score - powerbi[1].score >= 0.05)
+      ) {
+        // Confident, unambiguous hit in the Power BI customer list — link it.
+        await pickPowerBi(powerbi[0].name);
+      } else if (matches.length > 0 || powerbi.length > 0) {
         setMatchSuggestions(matches.slice(0, 3));
-      } else if (!auto) {
-        setNotice("Couldn't find a client name in the notes — pick one from the list.");
+        setPbiSuggestions(powerbi.slice(0, 3));
+        setNotice(
+          "I couldn't confidently match the client — tap the right one below, or type the name in the search box (spell it out if it's unusual).",
+        );
+      } else {
+        setNotice(
+          "No customer matched what was said. Type the client's name in the search box — it looks through the whole Power BI customer list.",
+        );
       }
     } catch {
       if (!auto) setError("Client matching failed.");
@@ -447,22 +586,30 @@ export function RecordMeetingForm({
         .map((s) => s.trim())
         .filter(Boolean);
 
-      const res = await fetch("/api/meetings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId,
-          meetingDate: new Date(`${meetingDate}T12:00:00`).toISOString(),
-          meetingType,
-          status: "completed",
-          transcript: transcript || null,
-          aiSummary: summary || null,
-          actionItems,
-          followUpRequired: actionItems.length > 0,
-          audioFileUrl,
-          audioMimeType,
-        }),
-      });
+      const meetingPayload = {
+        meetingDate: new Date(`${meetingDate}T12:00:00`).toISOString(),
+        meetingType,
+        status: "completed",
+        transcript: transcript || null,
+        aiSummary: summary || null,
+        actionItems,
+        followUpRequired: actionItems.length > 0,
+        audioFileUrl,
+        audioMimeType,
+      };
+
+      // Logging a booked visit? Complete THAT meeting. Otherwise create one.
+      const res = meetingId
+        ? await fetch(`/api/meetings/${meetingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(meetingPayload),
+          })
+        : await fetch("/api/meetings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clientId, ...meetingPayload }),
+          });
 
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -495,20 +642,70 @@ export function RecordMeetingForm({
           hint="Not sure of the name in the list? Record first — we'll find the client from what you say."
         />
         <div className="grid gap-4 sm:grid-cols-3">
-        <div className="sm:col-span-1">
-          <label className="label">Client</label>
-          <select
-            className="input"
-            value={clientId}
-            onChange={(e) => selectClient(e.target.value)}
-          >
-            <option value="">Select a client…</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.clientName}
-              </option>
-            ))}
-          </select>
+        <div className="relative sm:col-span-1">
+          <label className="label">Client (from Power BI)</label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              className="input pl-9"
+              placeholder="Type to search all customers…"
+              value={clientQuery}
+              onChange={(e) => {
+                setClientQuery(e.target.value);
+                setClientId("");
+                setSearchOpen(true);
+              }}
+              onFocus={() => setSearchOpen(true)}
+            />
+            {(linking || matching) && (
+              <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
+            )}
+          </div>
+
+          {searchOpen && searchResults && (searchResults.matches.length > 0 || searchResults.powerbi.length > 0) && (
+            <div className="absolute z-20 mt-1 max-h-72 w-full min-w-[280px] overflow-y-auto rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+              {searchResults.matches.length > 0 && (
+                <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  Your clients
+                </p>
+              )}
+              {searchResults.matches.map((m) => (
+                <button
+                  key={m.clientId}
+                  type="button"
+                  onClick={() => selectClient(m.clientId)}
+                  className="block w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-brand-50"
+                >
+                  {m.clientName}
+                </button>
+              ))}
+              {searchResults.powerbi.length > 0 && (
+                <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  From Power BI
+                </p>
+              )}
+              {searchResults.powerbi.map((p) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  disabled={linking}
+                  onClick={() => pickPowerBi(p.name)}
+                  className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-50 disabled:opacity-50"
+                >
+                  <span className="text-gray-800">{p.name}</span>
+                  <span className="ml-1 text-xs text-gray-400">
+                    {[p.rep, fmtValueShort(p.value)].filter(Boolean).join(" · ")}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {searchOpen && searchResults && searchResults.matches.length === 0 && searchResults.powerbi.length === 0 && clientQuery.trim().length >= 2 && (
+            <p className="mt-1 text-xs text-amber-700">
+              No customer found — check the spelling. Clients must match a real Power BI customer.
+            </p>
+          )}
+
           <button
             type="button"
             onClick={() => matchClientFromText(transcript)}
@@ -522,7 +719,7 @@ export function RecordMeetingForm({
             )}
             Find the client from my notes
           </button>
-          {matchSuggestions.length > 0 && (
+          {(matchSuggestions.length > 0 || pbiSuggestions.length > 0) && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               <span className="w-full text-xs text-gray-500">Did you mean:</span>
               {matchSuggestions.map((m) => (
@@ -533,6 +730,18 @@ export function RecordMeetingForm({
                   className="badge bg-brand-50 text-brand-700 hover:bg-brand-100"
                 >
                   {m.clientName} ({Math.round(m.score * 100)}%)
+                </button>
+              ))}
+              {pbiSuggestions.map((p) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  disabled={linking}
+                  onClick={() => pickPowerBi(p.name)}
+                  className="badge bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                  title={[p.rep, fmtValueShort(p.value)].filter(Boolean).join(" · ")}
+                >
+                  {p.name} · Power BI
                 </button>
               ))}
             </div>

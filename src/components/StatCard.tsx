@@ -17,13 +17,15 @@ export function StatCard({
 }) {
   const c = TONE_CLASSES[tone];
   const body = (
-    <div className="card card-pad h-full transition-shadow hover:shadow-cardhover">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-500">{label}</span>
-        <span className={`h-2.5 w-2.5 rounded-full ${c.dot}`} />
+    <div className="card h-full overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-cardhover">
+      <div className={`${c.softBg} h-full p-5`}>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-600">{label}</span>
+          <span className={`h-2.5 w-2.5 rounded-full ${c.dot} shadow-sm`} />
+        </div>
+        <div className="mt-2 text-3xl font-semibold tracking-tight text-gray-900">{value}</div>
+        {hint && <div className="mt-1 text-xs text-gray-500">{hint}</div>}
       </div>
-      <div className="mt-2 text-3xl font-semibold text-gray-900">{value}</div>
-      {hint && <div className="mt-1 text-xs text-gray-400">{hint}</div>}
     </div>
   );
   return href ? (
